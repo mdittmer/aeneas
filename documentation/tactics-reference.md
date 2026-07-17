@@ -12,6 +12,29 @@ the total-correctness `spec` statement. In particular, `step*` traverses binds a
 `match`/`if` expressions in `dspec` goals. With `+inferPost`, it also recursively processes
 registered specification goals that occur as preconditions of higher-order step theorems.
 
+Native `Std.Do` Hoare triples can also use the same `@[step]` annotation:
+
+```lean
+@[step]
+theorem my_func_result_spec (x : U32) :
+    ⦃ ⌜ precondition x ⌝ ⦄ my_func x ⦃ post⟨
+      fun value => ⌜ successPost x value ⌝,
+      fun error => ⌜ failurePost x error.down ⌝,
+      fun _ => ⌜ divergencePost x ⌝⟩ ⦄ := by
+  ...
+```
+
+These theorems are registered directly with Std.Do. On their goals, `step` and
+`step with my_theorem` delegate to `mspec`, while `step*` delegates to `mvcgen`.
+The notation `⇓? value => post` is the successful-return-only shorthand: it permits
+both failure and divergence. Plain `step` searches registered native specifications;
+use `step with h` to select a local or recursive Triple hypothesis. Aeneas-specific
+configuration options, `step as`, `step by`, `step?`, and numeric `step*` fuel are not
+silently translated to Std.Do because their meanings differ; use `mspec` or `mvcgen`
+directly when those controls are needed.
+Use `@[local step]` or a scoped `step` attribute for temporary native Triple specs.
+The theorem conclusion must expose `Triple` directly rather than through an abbreviation.
+
 **Syntax:**
 ```lean
 step                        -- basic: apply matching step theorem

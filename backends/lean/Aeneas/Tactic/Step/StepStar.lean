@@ -887,9 +887,35 @@ def parseArgs: TSyntax `Aeneas.StepStar.«step*_args» → TermElabM (Config × 
   pure (preconditionTac, fuel)
 | _ => throwUnsupportedSyntax
 
+/-- Reject `step*` arguments whose meaning is not preserved by a direct `mvcgen` delegation. -/
+private def ensurePlainStdDoStepStarArgs
+    (args : TSyntax `Aeneas.StepStar.«step*_args») : TacticM Unit := do
+  match args with
+  | `(«step*_args»| $(fuel)? $config $[by $preconditionTac:tacticSeq]?) =>
+    unless fuel.isNone &&
+        (Aeneas.Meta.OptionConfig.decomposeOptConfig config).isEmpty &&
+        preconditionTac.isNone do
+      throwError "fuel, configuration, and `by` modifiers are not supported by `step*` on `Std.Do` goals; use `mvcgen` directly"
+  | _ => throwUnsupportedSyntax
+
+/-- Forward repeated stepping on native `Std.Do` goals to `mvcgen`.
+
+The hinting form still performs the tactic, like legacy `step*?`, and reports `mvcgen` as the
+equivalent proof script. -/
+private def evalStdDoStepStar
+    (stx : Syntax) (args : TSyntax `Aeneas.StepStar.«step*_args») (suggest : Bool) : TacticM Unit := do
+  ensurePlainStdDoStepStarArgs args
+  evalTactic (← `(tactic| set_option mvcgen.warning false in mvcgen))
+  if suggest then
+    Aeneas.Utils.addTryThisTacticSeqSuggestion stx (← `(tacticSeq| mvcgen))
+      (origSpan? := ← getRef)
+
 /-- The `step*` tactic repeatedly applies `step` and `split` on the goal.
 
-Its variant `step*?` allows automatically generating the equivalent proof script.
+Its variant `step*?` allows automatically generating the equivalent proof script. On native
+`Std.Do.Triple` and proof-mode goals, `step*` delegates to `mvcgen`, and `step*?` suggests the
+equivalent `mvcgen` invocation. Fuel, configuration, and `by` modifiers are not translated because
+their Std.Do meanings differ from the corresponding Aeneas options.
 -/
 syntax (name := stepStar) "step" noWs ("*" <|> "*?") «step*_args»: tactic
 
@@ -897,14 +923,20 @@ syntax (name := stepStar) "step" noWs ("*" <|> "*?") «step*_args»: tactic
 def evalStepStarTac : Tactic := fun stx => do
   match stx with
   | `(tactic| step* $args:«step*_args») =>
-    let (cfg, fuel) ← parseArgs args
-    evalStepStar cfg fuel *> pure ()
+    if ← Step.isStdDoGoal then
+      evalStdDoStepStar stx args false
+    else
+      let (cfg, fuel) ← parseArgs args
+      evalStepStar cfg fuel *> pure ()
   | `(tactic| step*? $args:«step*_args») =>
-    let (cfg, fuel) ← parseArgs args
-    let info ← evalStepStar cfg fuel
-    let suggestion ← info.script.toSyntax
-    let suggestion ← `(tacticSeq|$(suggestion)*)
-    Aeneas.Utils.addTryThisTacticSeqSuggestion stx suggestion (origSpan? := ← getRef)
+    if ← Step.isStdDoGoal then
+      evalStdDoStepStar stx args true
+    else
+      let (cfg, fuel) ← parseArgs args
+      let info ← evalStepStar cfg fuel
+      let suggestion ← info.script.toSyntax
+      let suggestion ← `(tacticSeq|$(suggestion)*)
+      Aeneas.Utils.addTryThisTacticSeqSuggestion stx suggestion (origSpan? := ← getRef)
   | _ => throwUnsupportedSyntax
 
 end StepStar

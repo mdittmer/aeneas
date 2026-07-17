@@ -40,21 +40,12 @@ private def emitProgressWarning (what : String) : CoreM Unit := do
 /-- **Deprecated:** Use `step` instead. -/
 elab (name := deprecatedProgress) "progress" args:Step.stepArgs : tactic => do
   emitProgressWarning "progress"
-  let (config, withArg, ids, idsUserProvided, postsBasename, byTac) ← Step.parseStepArgs args
-  Step.evalStep config none withArg ids idsUserProvided postsBasename byTac *> return ()
+  evalTactic (← `(tactic| step $args))
 
 /-- **Deprecated:** Use `step?` instead. -/
-elab tk:"progress?" args:Step.stepArgs : tactic => do
+elab "progress?" args:Step.stepArgs : tactic => do
   emitProgressWarning "progress?"
-  let (config, withArg, ids, idsUserProvided, postsBasename, byTac) ← Step.parseStepArgs args
-  let stats ← Step.evalStep config none withArg ids idsUserProvided postsBasename byTac
-  let mut stxArgs := args.raw
-  if stxArgs[1].isNone then
-    let withArg := mkNullNode #[mkAtom "with", ← stats.toSyntax]
-    stxArgs := stxArgs.setArg 1 withArg
-  let tac := mkNode `Aeneas.Step.step #[mkAtom "step", stxArgs]
-  let fmt ← PrettyPrinter.ppCategory ``Lean.Parser.Tactic.tacticSeq tac
-  Meta.Tactic.TryThis.addSuggestion tk fmt.pretty (origSpan? := ← getRef)
+  evalTactic (← `(tactic| step? $args))
 
 /-- **Deprecated:** Use `step*` / `step*?` instead. -/
 syntax (name := deprecatedProgressStar) "progress" noWs ("*" <|> "*?") StepStar.«step*_args» : tactic
@@ -64,15 +55,10 @@ def evalDeprecatedProgressStarTac : Tactic := fun stx => do
   match stx with
   | `(tactic| progress* $args:«step*_args») =>
     emitProgressWarning "progress*"
-    let (cfg, fuel) ← StepStar.parseArgs args
-    StepStar.evalStepStar cfg fuel *> pure ()
+    evalTactic (← `(tactic| step* $args))
   | `(tactic| progress*? $args:«step*_args») =>
     emitProgressWarning "progress*?"
-    let (cfg, fuel) ← StepStar.parseArgs args
-    let info ← StepStar.evalStepStar cfg fuel
-    let suggestion ← info.script.toSyntax
-    let suggestion ← `(tacticSeq|$(suggestion)*)
-    Aeneas.Utils.addTryThisTacticSeqSuggestion stx suggestion (origSpan? := ← getRef)
+    evalTactic (← `(tactic| step*? $args))
   | _ => throwUnsupportedSyntax
 
 /-!

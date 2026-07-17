@@ -283,6 +283,42 @@ structure StepSpecAttr where
   ext  : Extension
   deriving Inhabited
 
+/-- Return whether the conclusion of a theorem is directly a native `Std.Do.Triple`. -/
+private def hasStdDoTripleConclusion (type : Expr) : MetaM Bool := do
+  let type ← instantiateMVars type
+  withNewMCtxDepth do
+    let (_, _, conclusion) ← withSimpGlobalConfig (forallMetaTelescope type)
+    pure (conclusion.isAppOfArity ``Std.Do.Triple 7)
+
+/-- Build the native spec entry from an asynchronous declaration's already available signature.
+
+We cannot use Std.Do's `mkSpecTheoremFromConst` here: `step` runs after type checking, while that
+helper requests the finalized constant and would wait for the declaration whose attribute is
+currently being processed. This is the direct-Triple subset of Std.Do's `mkSpecTheorem`. -/
+private def mkStdDoSpecTheorem? (thName : Name) (type : Expr) :
+    MetaM (Option Lean.Elab.Tactic.Do.SpecAttr.SpecTheorem) := do
+  let type ← instantiateMVars type
+  unless ← isProp type do return none
+  withNewMCtxDepth do
+    let (xs, _, conclusion) ← withSimpGlobalConfig (forallMetaTelescope type)
+    unless conclusion.isAppOfArity ``Std.Do.Triple 7 do return none
+    let args := conclusion.getAppArgs
+    let ps := args[1]!
+    let prog := args[4]!
+    let pre := args[5]!
+    let keys ← DiscrTree.mkPath prog (noIndexAtArgs := false)
+    let u := conclusion.getAppFn.constLevels![0]!
+    let σs := mkApp (mkConst ``Std.Do.PostShape.args [u]) ps
+    let etaPotential ←
+      Lean.Elab.Tactic.Do.SpecAttr.computeMVarBetaPotentialForSPred xs σs pre
+    return some {
+      keys
+      prog := ← mkForallFVars xs prog
+      proof := .global thName
+      etaPotential
+      priority := eval_prio default
+    }
+
 private def generateMvcgenSpec (toMvcgenThm : Name) (stx : Syntax) (attrKind : AttributeKind)
     (thDecl : AsyncConstantInfo) : MetaM Unit := do
   let sig := thDecl.sig.get
@@ -319,6 +355,14 @@ private def saveStepSpecFromThm (ext : Extension) (attrKind : AttributeKind) (st
     let some thDecl := env.findAsync? thName
       | throwError "Could not find theorem {thName}"
     let type := thDecl.sig.get.type
+    -- A native Triple is already in the exact form consumed by `mspec` and `mvcgen`. Register the
+    -- original theorem in Std.Do's spec extension, preserving the attribute scope. In particular,
+    -- do not put it in the legacy step database or generate a lossy `.mvcgen_spec` wrapper.
+    if let some specThm ← MetaM.run' (mkStdDoSpecTheorem? thName type) then
+      trace[Step] "Registering native Std.Do Triple theorem with `spec`: {thName}"
+      MetaM.run' do
+        Lean.Elab.Tactic.Do.SpecAttr.specAttr.add specThm attrKind
+      return
     let (fKey, info) ← MetaM.run' (do
       trace[Step] "Theorem: {type}"
       -- Normalize to eliminate the let-bindings
@@ -346,11 +390,17 @@ initialize stepAttr : StepSpecAttr ← do
   let ext ← mkExtension `stepMap
   let attrImpl : AttributeImpl := {
     name := `step
-    descr := "Adds theorems to the `step` database"
+    descr := "Registers specification theorems for the `step` tactics"
     add := fun thName stx attrKind => do
       Attribute.Builtin.ensureNoArgs stx
       saveStepSpecFromThm ext attrKind stx thName
     erase := fun thName => do
+      if let some thDecl := (← getEnv).findAsync? thName then
+        let isTriple ← MetaM.run' (hasStdDoTripleConclusion thDecl.sig.get.type)
+        if isTriple then
+          throwError "The `step` attribute cannot be erased from native `Std.Do.Triple` theorem \
+            `{thName}` because it is forwarded to Std.Do's non-erasable `spec` database. \
+            Use a local or scoped `step` attribute when temporary registration is required."
       let s := ext.getState (← getEnv)
       let s := s.erase thName
       modifyEnv fun env => ext.modifyState env fun _ => s

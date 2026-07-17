@@ -1379,6 +1379,42 @@ def evalStep
   setGoals (goals.unassignedVars.toList ++ sgs.toList ++ mainGoal)
   pure usedTheorem
 
+/-- Whether the current goal is a native `Std.Do.Triple`. -/
+def isStdDoTripleGoal : TacticM Bool := withMainContext do
+  let target ← instantiateMVars (← getMainTarget)
+  return target.consumeMData.isAppOf ``Std.Do.Triple
+
+/-- Whether the current goal belongs to the native `Std.Do` proof mode.
+
+Native Hoare triples and the proof-mode goals produced after their first `mspec` step use
+Std.Do's branch-aware postconditions, so they must stay in that proof engine. -/
+def isStdDoGoal : TacticM Bool := withMainContext do
+  let target ← instantiateMVars (← getMainTarget)
+  if target.consumeMData.isAppOf ``Std.Do.Triple then
+    return true
+  return (Lean.Elab.Tactic.Do.ProofMode.parseMGoal? target).isSome
+
+/-- Forward the common `step` surface to one native `Std.Do.mspec` application.
+
+The theorem argument deliberately remains syntax until `mspec` elaborates it against the
+current Triple. This supports local hypotheses and partially applied theorem terms. -/
+private def evalStdDoStepArgs (args : TSyntax ``stepArgs) : TacticM Unit := do
+  match args with
+  | `(stepArgs| $config $[with $specThm:term]? $[as ⟨ $ids,* ⟩]? $[by $byTac]?) =>
+    unless (Aeneas.Meta.OptionConfig.decomposeOptConfig config).isEmpty do
+      throwError "configuration options are not supported by `step` on `Std.Do` goals; use `mspec` directly"
+    if ids.isSome then
+      throwError "`step ... as` is not supported on `Std.Do` goals; use `mspec` directly"
+    if byTac.isSome then
+      throwError "`step ... by` is not supported on `Std.Do` goals; use `mspec` and solve its verification conditions explicitly"
+    if ← isStdDoTripleGoal then
+      evalTactic (← `(tactic| mintro _))
+    let tactic ← match specThm with
+      | none => `(tactic| mspec)
+      | some specThm => `(tactic| mspec $specThm)
+    evalTactic tactic
+  | _ => throwUnsupportedSyntax
+
 /-- The `step` tactic is used to reason about monadic goals.
 It is a bit equivalent to the `mvcgen` tactic from the Lean standard library.
 
@@ -1387,6 +1423,13 @@ or looked up in the database of `step` theorems) which describes the behavior of
 function, then applying it to the current goal. It then introduces the
 existentially quantified variables and splits the conjunctions in the
 post-condition, before trying to solve the preconditions.
+
+On a native `Std.Do.Triple` goal, `step` instead enters Std.Do proof mode and delegates one
+specification application to `mspec`. This preserves separate success, failure, and divergence
+postconditions. `step with <thm>` forwards the theorem term directly to `mspec`; the Aeneas-specific
+configuration, `as`, `by`, and `step?` forms are not supported on native Std.Do goals. Automatic
+native lookup uses registered specifications; select local or recursive hypotheses explicitly with
+`step with <hypothesis>`.
 
 For instance, given the goal:
 ```lean
@@ -1442,16 +1485,28 @@ The `step` tactic also supports the following syntax:
 `let ⟨ id1, id2, ... ⟩ ←[+splitIte (splits := 6)]? <withArg> (by <tactic>)?`
 which is equivalent to:
 `step +splitIte (splits := 6) with <withArg> as ⟨ id1, id2, ... ⟩ by <tactic>`
+This naming-oriented alternative is available only for Aeneas single-post specification goals.
 
 **The `step` attribute:**
 To make a theorem available for `step`, the user can tag it with the
-`@[step]` attribute. The theorem must have the following shape:
+`@[step]` attribute. An Aeneas specification theorem has the following shape:
 ```lean
 theorem thm_name (arg1 : ty1) ... (argn : tyn)
     (h_pre1 : precondition_1) ... (h_prem : precondition_m) :
-  f arg1 ... argn = ⦃ res1 ... resk => postcondition_1 ∧ ... ∧ postcondition_k ⦄
+  f arg1 ... argn ⦃ res1 ... resk => postcondition_1 ∧ ... ∧ postcondition_k ⦄
 ```
 where `f` is a monadic function with type `Result ...`.
+
+A native Std.Do theorem may instead use a leading precondition and a branch-aware postcondition:
+```lean
+@[step]
+theorem thm_name (x : α) :
+  ⦃ ⌜ pre x ⌝ ⦄ f x ⦃ post⟨okPost, failPost, divPost⟩ ⦄ := by
+  ...
+```
+Such theorems are forwarded directly to Std.Do's specification database. Use a local or scoped
+`step` attribute for temporary registration; Std.Do's database does not support attribute erasure.
+The theorem conclusion must expose `Triple` directly rather than through an abbreviation.
 
 **Ghost Variables:**
 It is possible to write step theorems which use ghost variables, i.e., variables
@@ -1474,11 +1529,16 @@ which repeatedly calls `step` until no further progress can be made. See the doc
 of `step*` for more details.
 -/
 elab (name := step) "step" args:stepArgs : tactic => do
-  let (config, withArg, ids, idsUserProvided, postsBasename, byTac) ← parseStepArgs args
-  evalStep config none withArg ids idsUserProvided postsBasename byTac *> return ()
+  if ← isStdDoGoal then
+    evalStdDoStepArgs args
+  else
+    let (config, withArg, ids, idsUserProvided, postsBasename, byTac) ← parseStepArgs args
+    evalStep config none withArg ids idsUserProvided postsBasename byTac *> return ()
 
 @[inherit_doc step]
 elab tk:"step?" args:stepArgs : tactic => do
+  if ← isStdDoGoal then
+    throwError "`step?` is not supported on `Std.Do` goals; use `mspec` or `step with <theorem>`"
   let (config, withArg, ids, idsUserProvided, postsBasename, byTac) ← parseStepArgs args
   let stats ← evalStep config none withArg ids idsUserProvided postsBasename byTac
   let mut stxArgs := args.raw
@@ -1546,6 +1606,8 @@ def parseLetStep
 | _ => throwUnsupportedSyntax
 
 elab tk:letStep : tactic => do
+  if ← isStdDoGoal then
+    throwError "`let* ⟨...⟩ ← ...` is not supported on `Std.Do` goals; use `step` or `mspec` directly"
   withMainContext do
   let (config, withArg, suggest, ids, postsBasename, byTac) ← parseLetStep tk
   let idsUserProvided := true

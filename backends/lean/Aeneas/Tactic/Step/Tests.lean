@@ -3,5 +3,6 @@ import Aeneas.Tactic.Step.Tests.IntroOutputs
 import Aeneas.Tactic.Step.Tests.MaxRecDepthMetavar
 import Aeneas.Tactic.Step.Tests.MvcgenSpec
 import Aeneas.Tactic.Step.Tests.RegisteredSpec
+import Aeneas.Tactic.Step.Tests.StdDoTriple
 import Aeneas.Tactic.Step.Tests.TupleDestruct
 import Aeneas.Tactic.Step.Tests.UncurryBind
