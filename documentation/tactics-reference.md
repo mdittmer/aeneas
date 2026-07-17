@@ -7,6 +7,11 @@ The main workhorse tactic for Aeneas proofs. It applies function specifications 
 
 **How it works:** When the goal contains a monadic bind like `do let x ← f args; ...`, `step` looks for a theorem tagged with `@[step]` whose conclusion matches `f args ⦃ x => ... ⦄`, applies it, and leaves the preconditions and remaining goals for the user to prove.
 
+`step` and `step*` work with every specification statement registered with Aeneas, not only
+the total-correctness `spec` statement. In particular, `step*` traverses binds and splits
+`match`/`if` expressions in `dspec` goals. With `+inferPost`, it also recursively processes
+registered specification goals that occur as preconditions of higher-order step theorems.
+
 **Syntax:**
 ```lean
 step                        -- basic: apply matching step theorem

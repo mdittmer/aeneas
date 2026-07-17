@@ -4,16 +4,24 @@ open Lean Meta Elab Tactic
 
 namespace Aeneas
 
-/-- Given a goal of the shape `spec (match ... with ...) post`, perform a case split
-and introduce an equality. -/
+/-- Return the program from a fully applied, registered specification statement. -/
+private def getRegisteredSpecProgram? (target : Expr) : MetaM (Option (SpecInfo × Expr)) := do
+  let (spec?, args) := target.consumeMData.withApp fun f args => (f, args)
+  let .const specName _ := spec? | return none
+  let some info ← specInfoLookup specName | return none
+  if args.size != info.arity then return none
+  let some program := args[info.program_index]? | return none
+  pure (some (info, program))
+
+/-- Given a goal whose program is a `match`, perform a case split and introduce an equality.
+The outer specification statement may be any statement registered through `SpecInfo`. -/
 def esplitMatchAtSpec (h : Name) (names : Option (List (List (Option Name)))) :
   TacticM (List (Array FVarId × FVarId × MVarId)) := do
   withTraceNode `Utils (fun _ => do pure m!"esplitMatchAtSpec") do
   focus do withMainContext do
   let tgt ← getMainTarget
-  tgt.consumeMData.withApp fun spec? args => do
-  if ¬ (spec?.isConstOf ``Std.WP.spec) ∨ args.size ≠ 3 then throwError "Not a valid spec goal"
-  let prog := args[1]!
+  let some (_, prog) ← getRegisteredSpecProgram? tgt
+    | throwError "Not a valid registered spec goal"
   -- Check that we have a matcher
   let some ma ← Meta.matchMatcherApp? prog (alsoCasesOn := true)
     | throwError "not a matcher: {prog}"
@@ -57,15 +65,14 @@ example {α} (x : Option α) :
 theorem dite_true: (dite True t e) = t (by simp) := by simp
 theorem dite_false : (dite False t e) = e (by simp) := by simp
 
-/-- Split an `if then else` in a spec predicate:
-`⊢ spec (if ... then ... else ...) post`
+/-- Split an `if then else` in a registered specification statement:
+`⊢ registeredSpec ... (if ... then ... else ...) ...`
 -/
 def esplitIteAtSpec (h : Name) : TacticM (List (FVarId × MVarId)) := do
   focus do withMainContext do
   let tgt ← getMainTarget
-  tgt.consumeMData.withApp fun spec? args => do
-  if ¬ (spec?.isConstOf ``Std.WP.spec) ∨ args.size ≠ 3 then throwError "Not a valid spec goal"
-  let prog := args[1]!
+  let some (_, prog) ← getRegisteredSpecProgram? tgt
+    | throwError "Not a valid registered spec goal"
   -- Check that we have an if then else
   prog.withApp fun ite? args => do
   trace[Utils] "ite?: {ite?}, args: {args}"
@@ -134,15 +141,14 @@ h : ¬b = true
 example (b : Bool) : Std.WP.spec (if h: b then .ok 0 else .ok 1) (fun _ => True) := by
   spec_split_if as h
 
-/-- Given a goal of the shape `spec (match ... with ...) post` or `spec (if ... then ... else ...)`,
-perform a case split. -/
+/-- Given a registered specification goal whose program is a `match` or `if`, perform a case
+split. -/
 def esplitAtSpec (h : Name) (names : Option (List (List (Option Name)))) : TacticM (List (Array FVarId × FVarId × MVarId)) := do
   withTraceNode `Utils (fun _ => do pure m!"esplitAtSpec") do
   focus do withMainContext do
   let tgt ← getMainTarget
-  tgt.consumeMData.withApp fun spec? args => do
-  if ¬ (spec?.isConstOf ``Std.WP.spec) ∨ args.size ≠ 3 then throwError "Not a valid spec goal"
-  let prog := args[1]!
+  let some (_, prog) ← getRegisteredSpecProgram? tgt
+    | throwError "Not a valid registered spec goal"
   -- Check whether we have a matcher
   let ma ← Meta.matchMatcherApp? prog (alsoCasesOn := true)
   if ma.isSome
@@ -386,11 +392,9 @@ def analyzeTarget : TacticM TargetKind := do
   withTraceNode `Step (fun _ => do pure m!"analyzeTarget") do
   try
     let goalTy ← (← getMainGoal).getType
-    -- Dive into the `spec program post`
-    goalTy.consumeMData.withApp fun spec? args => do
-    if h: spec?.isConstOf ``Std.WP.spec ∧ args.size = 3 then
-      trace[Step] "application of `spec` with arity 3"
-      let program := args[1]
+    -- Dive into the registered specification statement.
+    if let some (info, program) ← getRegisteredSpecProgram? goalTy then
+      trace[Step] "application of registered specification `{info.spec_name}`"
       -- Check if this is a bind
       let e ← Utils.normalizeLetBindings program
       if let .const ``Bind.bind .. := e.getAppFn then
@@ -403,7 +407,7 @@ def analyzeTarget : TacticM TargetKind := do
       else
         pure .result
     else
-      trace[Step] "not an application of `spec` with arity 3"
+      trace[Step] "not an application of a registered specification statement"
       pure .result
   catch _ =>
     trace[Step] "exception caught"
@@ -662,7 +666,7 @@ where
         | .none =>
           if ← mvarId.isAssigned then
             continue
-          -- Check if this precondition contains a spec goal
+          -- Check if this precondition contains a registered specification goal
           -- (possibly under ∀ binders, e.g., ∀ y, mid y → f y ⦃ post ⦄).
           let precTy ← instantiateMVars (← mvarId.getType)
           let rec stripForall (e : Expr) : Expr :=
@@ -670,8 +674,7 @@ where
             | .forallE _ _ body _ => stripForall body
             | e => e
           let innerTy := stripForall precTy
-          let isSpec := innerTy.consumeMData.withApp fun f args =>
-            f.isConstOf ``Std.WP.spec && args.size == 3
+          let isSpec := (← getRegisteredSpecProgram? innerTy).isSome
           if isSpec then
             let tag ← mvarId.getTag
             let (subInfo, introNames) ← commitIfNoEx do
