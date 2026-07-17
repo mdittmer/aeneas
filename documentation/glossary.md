@@ -24,6 +24,10 @@
 
 **Weakest-precondition notation (`⦃ ⦄`)** — The notation `f x ⦃ r => P r ⦄` means "`f x` succeeds and the result `r` satisfies `P r`." Used in all Aeneas spec statements.
 
+**Divergence-permitting specification (`dspec`)** — The notation `f x ⦃ r => P r ⦄div` means that `f x` does not fail and, if it returns successfully, its result satisfies `P r`. Unlike the usual specification, it permits `div` (nontermination).
+
+**Result-aware Hoare postcondition** — In a `Std.Do` triple, `⇓ r => P r` requires successful return, `⇓? r => P r` constrains only successful returns while permitting failure or divergence, and `post⟨okPost, failPost, divPost⟩` specifies all three `Result` variants separately.
+
 **Fold theorem** — A theorem proving that a sequence of inline monadic operations equals a call to a helper function. Used to decompose large proofs into manageable pieces.
 
 **`#setup_aeneas_simps`** — A command placed at the top of proof files that enables `getElem!`/`set!` patterns and deactivates problematic simp lemmas.

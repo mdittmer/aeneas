@@ -15,6 +15,12 @@ theorem my_function_spec (x : U32) (h : precondition) :
 
 The `⦃ result => postcondition ⦄` notation is the weakest-precondition spec notation. For functions returning `Result T`, it means "the function succeeds and the result satisfies the postcondition."
 
+For a potentially nonterminating function, `f ⦃ result => postcondition ⦄div` permits
+`div`, but still rules out `fail`: if `f` returns successfully, its result satisfies the
+postcondition. When failure and divergence should both be admitted, a `Std.Do` Hoare triple
+with `⇓?` constrains only the successful result. Use
+`post⟨okPost, failPost, divPost⟩` when each `Result` variant needs its own condition.
+
 For functions with backward continuations:
 ```lean
 @[step]

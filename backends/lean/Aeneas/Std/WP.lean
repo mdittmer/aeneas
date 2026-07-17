@@ -812,15 +812,24 @@ instance Result.instWPMonad : WPMonad Result (.except (ULift Error) (.except PUn
   wp_pure a := by apply PredTrans.ext; intro Q; simp [PredTrans.apply, wp, WP.wp]; rfl
   wp_bind x f := by apply PredTrans.ext; intro Q; simp [PredTrans.apply, wp, WP.wp]; cases x <;> rfl
 
+/-- Turn a predicate over all three `Result` constructors into a `Std.Do` postcondition.
+
+This hides the implementation-level `ULift Error` and `PUnit` arguments used by the
+`WP Result` instance. -/
+abbrev resultPost {α : Type u} (P : Result α → Prop) :
+    PostCond α (.except (ULift Error) (.except PUnit .pure)) :=
+  post⟨fun a => ⌜P (.ok a)⌝,
+       fun e => ⌜P (.fail e.down)⌝,
+       fun _ => ⌜P .div⌝⟩
+
 theorem Result.of_wp {α : Type u} {x : Result α} (P : Result α → Prop) :
-    (⊢ₛ wp⟦x⟧ (fun a => ⌜P (.ok a)⌝,
-                  fun e => ⌜P (.fail e.down)⌝,
-                  fun .unit => ⌜P .div⌝, .unit)) → P x := by
+    (⊢ₛ wp⟦x⟧ (resultPost P)) → P x := by
   intro hspec
-  simp only [WP.wp, PredTrans.apply] at hspec
+  simp only [resultPost, WP.wp, PredTrans.apply] at hspec
   split at hspec <;> simp_all
 
-/-- Lift an Aeneas step spec to an mvcgen-compatible `Triple`. -/
+/-- Lift an Aeneas total-success spec to its exact `Std.Do` postcondition:
+`Q` on success and `False` on both failure and divergence. -/
 theorem spec_to_mvcgen {α : Type u} {x : Result α} {Q : α → Prop}
     (h : spec x Q) :
     ⦃ ⌜ True ⌝ ⦄ x ⦃ ⇓ r => ⌜ Q r ⌝ ⦄ := by
@@ -828,11 +837,23 @@ theorem spec_to_mvcgen {α : Type u} {x : Result α} {Q : α → Prop}
   subst hx
   simp [Triple, WP.wp, PredTrans.apply, hQv]
 
+/-- Lift an Aeneas divergence-permitting spec to a no-throw `Std.Do` postcondition,
+provided that the computation does not diverge. -/
 theorem dspec_to_mvcgen {α : Type u} {x : Result α} {Q : α → Prop}
     (h : dspec x Q) :
     ⦃ ⌜ ¬ x = .div ⌝ ⦄ x ⦃ ⇓ r => ⌜ Q r ⌝ ⦄ := by
   simp [Triple, WP.wp, PredTrans.apply, SPred.pure]
   cases x <;> simp [*, dspec] at * <;> trivial
+
+/-- Lift an Aeneas divergence-permitting spec to its exact `Std.Do` postcondition:
+`Q` on success, `False` on failure, and `True` on divergence. -/
+theorem dspec_to_mvcgen_exact {α : Type u} {x : Result α} {Q : α → Prop}
+    (h : dspec x Q) :
+    ⦃ ⌜ True ⌝ ⦄ x ⦃ post⟨
+      fun r => ⌜ Q r ⌝,
+      fun _ => ⌜ False ⌝,
+      fun _ => ⌜ True ⌝⟩ ⦄ := by
+  cases x <;> simp [Triple, WP.wp, PredTrans.apply, dspec] at * <;> assumption
 
 end Aeneas.Std.WP
 
@@ -935,7 +956,7 @@ theorem forall_unit {p : Prop} : (Unit → p) ↔ p := by simp
       ``Std.WP.uncurry'_eq, ``Std.WP.uncurry'_pair,
       ``Std.WP.imp_exists_iff,
       ``forall_unit, ``true_imp_iff]
-    to_mvcgen := .some ``Std.WP.dspec_to_mvcgen
+    to_mvcgen := .some ``Std.WP.dspec_to_mvcgen_exact
     liftings := #[
       { from_statement := ``Std.WP.spec
         conversion_thm := ``Std.WP.spec_dspec

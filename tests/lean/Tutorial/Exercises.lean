@@ -876,13 +876,14 @@ def pseudo_random {T : Type} (HashInst : Hash T) : Result Std.U32 := do
   pseudo_random_loop HashInst 0#u32
 
 /- Exercise about dspec.
-For the usual spec `r ⦃post⦄`, one needs to prove that `r` terminates and
-produces a value that satisfies `post`
+For the usual spec `r ⦃post⦄`, one needs to prove that `r` returns successfully
+(neither failing nor diverging) and produces a value that satisfies `post`.
 
 However, sometimes a function may be potentially nonterminating.
 `dspec` (notation `r ⦃post⦄div`) is a weaker statement,
-and only means that if `r` terminates then the result satisfies `post`.
-It works with the `step` tactic and any `@step` theorems for `spec` are automatically
+and means that `r` does not fail and, if it returns successfully, the result
+satisfies `post`. It permits `r` to diverge.
+It works with the `step` tactic and any `@[step]` theorems for `spec` are automatically
 lifted to `dspec`. You will also need the `dspec_induction` tactic to complete this exercise,
 which is used to prove a fact about a recursive function by induction in its recursive calls.
 
